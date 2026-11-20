@@ -1,0 +1,88 @@
+name: test-installer (TEMP, fork only)
+on:
+  push:
+    branches: [ci-check-login-shell]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-22.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run installer scenarios
+        shell: bash
+        run: |
+          set -u
+          fail=0
+          check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fail=1; fi; }
+          run_installer() { # $1 = home dir, rest = env assignments
+            local home="$1"; shift
+            rm -rf "$home"; mkdir -p "$home"
+            env -u PYENV_ROOT HOME="$home" "$@" bash bin/pyenv-installer >"$home.out" 2>"$home.err"
+            echo $? > "$home.status"
+            echo "----- $home stderr"; cat "$home.err"
+          }
+          command -v pyenv && { echo "pyenv already on PATH, scenarios would be skipped"; exit 1; }
+
+          # 1. SHELL=bash
+          h="$RUNNER_TEMP/h1"; run_installer "$h" SHELL=/bin/bash
+          check "1 exit 0" '[ "$(cat $h.status)" = 0 ]'
+          check "1 says login shell bash" 'grep -qx "pyenv: login shell detected as bash" $h.err'
+          check "1 configuring for bash" 'grep -qx "pyenv: configuring for bash" $h.err'
+          check "1 bashrc written" 'grep -q "pyenv init - bash" $h/.bashrc'
+          check "1 restart message" 'grep -q "Restart your shell" $h.err'
+          check "1 no WARNING" '! grep -q "WARNING" $h.err'
+          check "1 virtualenv-init help still shown" 'grep -q "virtualenv-init" $h.err'
+
+          # 2. SHELL=zsh (zsh binary not needed)
+          h="$RUNNER_TEMP/h2"; run_installer "$h" SHELL=/usr/bin/zsh
+          check "2 exit 0" '[ "$(cat $h.status)" = 0 ]'
+          check "2 says login shell zsh" 'grep -qx "pyenv: login shell detected as zsh" $h.err'
+          check "2 zshrc written" 'grep -q "pyenv init - zsh" $h/.zshrc'
+          check "2 zprofile written" 'grep -q "pyenv init - zsh" $h/.zprofile'
+          check "2 no bashrc" '[ ! -e $h/.bashrc ]'
+
+          # 3. SHELL unset -> getent (Linux) / dscl (macOS)
+          expected="$(basename "$( (getent passwd "$(id -un)" 2>/dev/null || true) | cut -d: -f7)")"
+          if [ -z "$expected" ] || [ "$expected" = . ]; then
+            expected="$(basename "$(dscl . -read "/Users/$(id -un)" UserShell | sed -n 's/^UserShell: //p')")"
+          fi
+          echo "runner login shell: $expected"
+          h="$RUNNER_TEMP/h3"; run_installer "$h" -u SHELL
+          check "3 detected from passwd/dscl" 'grep -qx "pyenv: login shell detected as $expected" $h.err'
+          check "3 exit 0" '[ "$(cat $h.status)" = 0 ]'
+
+          # 4. Pyenv code already in .bashrc -> nothing changed, manual help shown
+          h="$RUNNER_TEMP/h4"; rm -rf "$h"; mkdir -p "$h"; echo 'eval "$(pyenv init -)"' > "$h/.bashrc"
+          env -u PYENV_ROOT HOME="$h" SHELL=/bin/bash bash bin/pyenv-installer >"$h.out" 2>"$h.err"; echo $? > "$h.status"; cat "$h.err"
+          check "4 exit 0" '[ "$(cat $h.status)" = 0 ]'
+          check "4 no files changed" 'grep -qx "pyenv: no files were changed." $h.err'
+          check "4 WARNING shown" 'grep -q "WARNING" $h.err'
+          check "4 bashrc unchanged" '[ "$(cat $h/.bashrc)" = "eval \"\$(pyenv init -)\"" ]'
+          check "4 no profile" '[ ! -e $h/.profile ]'
+
+          # 5. Unsupported shell -> manual help
+          h="$RUNNER_TEMP/h5"; run_installer "$h" SHELL=/bin/sh
+          check "5 exit 0" '[ "$(cat $h.status)" = 0 ]'
+          check "5 says sh" 'grep -qx "pyenv: login shell detected as sh" $h.err'
+          check "5 WARNING shown" 'grep -q "WARNING" $h.err'
+          check "5 no startup files" '[ ! -e $h/.bashrc ] && [ ! -e $h/.profile ]'
+
+          # 6. SHELL unset and no getent/dscl -> manual help (PATH without them)
+          d="$RUNNER_TEMP/bin6"; rm -rf "$d"; mkdir -p "$d"
+          for c in git id cut sed bash env cat mkdir rm grep dirname basename readlink tr ps uname head tail sort printf mktemp ls ln chmod; do p="$(command -v $c || true)"; [ -n "$p" ] && ln -sf "$p" "$d/$c"; done
+          h="$RUNNER_TEMP/h6"; rm -rf "$h"; mkdir -p "$h"
+          env -u PYENV_ROOT -u SHELL HOME="$h" PATH="$d" "$d/bash" bin/pyenv-installer >"$h.out" 2>"$h.err"; echo $? > "$h.status"; cat "$h.err"
+          check "6 exit 0" '[ "$(cat $h.status)" = 0 ]'
+          check "6 no login-shell line" '! grep -q "login shell detected" $h.err'
+          check "6 WARNING shown" 'grep -q "WARNING" $h.err'
+          check "6 no startup files" '[ ! -e $h/.bashrc ] && [ ! -e $h/.profile ]'
+
+          exit $fail
