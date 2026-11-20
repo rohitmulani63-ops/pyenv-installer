@@ -19,13 +19,13 @@ jobs:
       - name: Run installer scenarios
         shell: bash
         run: |
-          set -u
+          set -u +e +o pipefail
           fail=0
           check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fail=1; fi; }
           run_installer() { # $1 = home dir, rest = env assignments
             local home="$1"; shift
             rm -rf "$home"; mkdir -p "$home"
-            env -u PYENV_ROOT HOME="$home" "$@" bash bin/pyenv-installer >"$home.out" 2>"$home.err"
+            env -u PYENV_ROOT "$@" HOME="$home" bash bin/pyenv-installer >"$home.out" 2>"$home.err"
             echo $? > "$home.status"
             echo "----- $home stderr"; cat "$home.err"
           }
@@ -49,14 +49,13 @@ jobs:
           check "2 zprofile written" 'grep -q "pyenv init - zsh" $h/.zprofile'
           check "2 no bashrc" '[ ! -e $h/.bashrc ]'
 
-          # 3. SHELL unset -> getent (Linux) / dscl (macOS)
-          expected="$(basename "$( (getent passwd "$(id -un)" 2>/dev/null || true) | cut -d: -f7)")"
-          if [ -z "$expected" ] || [ "$expected" = . ]; then
-            expected="$(basename "$(dscl . -read "/Users/$(id -un)" UserShell | sed -n 's/^UserShell: //p')")"
-          fi
+          # 3. SHELL unset -> bash itself sets it from the passwd entry (getent on Linux, dscl on macOS)
+          expected="$( (getent passwd "$(id -un)" 2>/dev/null || true) | cut -d: -f7)"
+          [ -n "$expected" ] || expected="$(dscl . -read "/Users/$(id -un)" UserShell | sed -n 's/^UserShell: //p')"
+          expected="${expected##*/}"
           echo "runner login shell: $expected"
           h="$RUNNER_TEMP/h3"; run_installer "$h" -u SHELL
-          check "3 detected from passwd/dscl" 'grep -qx "pyenv: login shell detected as $expected" $h.err'
+          check "3 detected from passwd" 'grep -qx "pyenv: login shell detected as $expected" $h.err'
           check "3 exit 0" '[ "$(cat $h.status)" = 0 ]'
 
           # 4. Pyenv code already in .bashrc -> nothing changed, manual help shown
@@ -75,11 +74,8 @@ jobs:
           check "5 WARNING shown" 'grep -q "WARNING" $h.err'
           check "5 no startup files" '[ ! -e $h/.bashrc ] && [ ! -e $h/.profile ]'
 
-          # 6. SHELL unset and no getent/dscl -> manual help (PATH without them)
-          d="$RUNNER_TEMP/bin6"; rm -rf "$d"; mkdir -p "$d"
-          for c in git id cut sed bash env cat mkdir rm grep dirname basename readlink tr ps uname head tail sort printf mktemp ls ln chmod; do p="$(command -v $c || true)"; [ -n "$p" ] && ln -sf "$p" "$d/$c"; done
-          h="$RUNNER_TEMP/h6"; rm -rf "$h"; mkdir -p "$h"
-          env -u PYENV_ROOT -u SHELL HOME="$h" PATH="$d" "$d/bash" bin/pyenv-installer >"$h.out" 2>"$h.err"; echo $? > "$h.status"; cat "$h.err"
+          # 6. SHELL set but empty (bash keeps it empty) -> manual help, nothing written
+          h="$RUNNER_TEMP/h6"; run_installer "$h" SHELL=
           check "6 exit 0" '[ "$(cat $h.status)" = 0 ]'
           check "6 no login-shell line" '! grep -q "login shell detected" $h.err'
           check "6 WARNING shown" 'grep -q "WARNING" $h.err'

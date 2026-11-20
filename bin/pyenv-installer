@@ -83,34 +83,13 @@ checkout "${GITHUB}pyenv/pyenv-doctor.git"     "${PYENV_ROOT}/plugins/pyenv-doct
 checkout "${GITHUB}pyenv/pyenv-update.git"     "${PYENV_ROOT}/plugins/pyenv-update"      "master"
 checkout "${GITHUB}pyenv/pyenv-virtualenv.git" "${PYENV_ROOT}/plugins/pyenv-virtualenv"  "master"
 
-# Prints the basename of the user's login shell, or nothing if it can't be found.
-# The installer itself always runs in bash, so the shell that launched it says nothing.
-detect_login_shell() {
-  local shell="${SHELL:-}" user
-
-  if [ -z "$shell" ] && user="$(id -un 2>/dev/null)" && [ -n "$user" ]; then
-    if command -v getent 1>/dev/null 2>&1; then
-      shell="$(getent passwd "$user" 2>/dev/null | cut -d: -f7)"
-    elif command -v dscl 1>/dev/null 2>&1; then
-      shell="$(dscl . -read "/Users/$user" UserShell 2>/dev/null | sed -n 's/^UserShell: //p')"
-    fi
-  fi
-
-  echo "${shell##*/}"
-}
-
 if ! command -v pyenv 1>/dev/null; then
-  login_shell="$(detect_login_shell)"
-  configured=
+  # The installer runs in bash, which sets $SHELL from the user's passwd entry if it isn't set.
+  login_shell="${SHELL##*/}"
 
-  if [ -n "$login_shell" ]; then
-    echo "pyenv: login shell detected as $login_shell" >&2
-    if "${PYENV_ROOT}/bin/pyenv" init --install "$login_shell"; then
-      configured=1
-    fi
-  fi
-
-  if [ -n "$configured" ]; then
+  if [ -n "$login_shell" ] &&
+     echo "pyenv: login shell detected as $login_shell" >&2 &&
+     "${PYENV_ROOT}/bin/pyenv" init --install "$login_shell"; then
     { echo
       echo "Restart your shell for the changes to take effect."
       echo
@@ -122,8 +101,8 @@ if ! command -v pyenv 1>/dev/null; then
       echo
     } >&2
 
-    { # Without args, `init` prints installation help
-      "${PYENV_ROOT}/bin/pyenv" init || true
+    { # Without `-`, `init` prints installation help
+      "${PYENV_ROOT}/bin/pyenv" init ${login_shell:+"$login_shell"} || true
     } >&2
   fi
 
