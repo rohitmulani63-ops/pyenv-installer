@@ -48,6 +48,7 @@ jobs:
           check "2 zshrc written" 'grep -q "pyenv init - zsh" $h/.zshrc'
           check "2 zprofile written" 'grep -q "pyenv init - zsh" $h/.zprofile'
           check "2 no bashrc" '[ ! -e $h/.bashrc ]'
+          check "2 virtualenv hint for zsh" 'grep -q "following to ~/.zshrc" $h.err'
 
           # 3. SHELL unset -> bash itself sets it from the passwd entry (getent on Linux, dscl on macOS)
           expected="$( (getent passwd "$(id -un)" 2>/dev/null || true) | cut -d: -f7)"

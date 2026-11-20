@@ -107,6 +107,6 @@ if ! command -v pyenv 1>/dev/null; then
   fi
 
   { # Without args, `virtualenv-init` prints installation help
-    "${PYENV_ROOT}/bin/pyenv" virtualenv-init || true
+    "${PYENV_ROOT}/bin/pyenv" virtualenv-init ${login_shell:+"$login_shell"} || true
   } >&2
 fi
